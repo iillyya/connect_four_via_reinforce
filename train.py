@@ -15,25 +15,32 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MODEL_PATH_DEFAULT = "connect4_policy.pt"
 
 
-# -------------------------
-# Networks
-# -------------------------
 class PolicyNet(nn.Module):
     def __init__(self, rows=6, cols=7):
         super().__init__()
         self.rows = rows
         self.cols = cols
-        self.net = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(rows * cols, 128),
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+        )
+
+        self.head = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(64 * rows * cols, 128),
             nn.ReLU(),
             nn.Linear(128, cols)
         )
 
     def forward(self, x):
-        return self.net(x)
+        # x: (batch, rows, cols)
+        x = x.unsqueeze(1)  # → (batch, 1, rows, cols)
+        x = self.conv(x)
+        x = self.head(x)
+        return x
 
 
 class ValueNet(nn.Module):
@@ -89,9 +96,6 @@ def compute_returns(rewards: List[float], gamma=0.99) -> torch.Tensor:
     return torch.tensor(returns, dtype=torch.float32, device=device)
 
 
-# -------------------------
-# Save / Load
-# -------------------------
 def save_checkpoint(policy: PolicyNet, value: ValueNet, path=MODEL_PATH_DEFAULT):
     torch.save({
         "policy_state_dict": policy.state_dict(),
@@ -114,9 +118,6 @@ def load_policy_value(path=MODEL_PATH_DEFAULT):
     return policy, value
 
 
-# -------------------------
-# Training with lagged opponent + value baseline
-# -------------------------
 def train(
     num_episodes: int = 5000,
     gamma: float = 0.99,
