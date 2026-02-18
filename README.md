@@ -127,12 +127,6 @@ cd connect_four_via_reinforce
 uv sync
 ```
 
-Run tests:
-
-```bash
-uv run python -m unittest discover -s tests -v
-```
-
 Download pretrained model:
 
 ```bash
