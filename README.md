@@ -11,7 +11,7 @@ The environment is implemented from scratch using **NumPy** (no Gym/Gymnasium), 
 - Implement Connect Four environment without external RL libraries
 - Train an agent using vanilla REINFORCE
 - Explore instability and variance issues in Monte Carlo policy gradients
-- Experiment with improvements (entropy regularization, stronger opponents, self-play, actor-critic)
+- Experiment with improvements
 
 ---
 
