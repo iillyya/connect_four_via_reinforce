@@ -4,15 +4,15 @@ Compact RL project: a Connect-4 agent trained with REINFORCE
 
 ## 1. Problem formulation (MDP)
 
-We model Connect-4 as an MDP $ (\mathcal{S}, \mathcal{A}, P, R, \gamma) $:
+We model Connect-4 as an MDP $(\mathcal{S}, \mathcal{A}, P, R, \gamma)$:
 
-- State $ s_t = (B_t, p_t) $: board $ B_t \in \{-1,0,+1\}^{6 \times 7} $ and current player $ p_t $.
-- Action $ a_t \in \mathcal{A}(s_t) $: selected column.
+- State $s_t = (B_t, p_t)$: board $B_t \in \{-1,0,+1\}^{6 \times 7}$ and current player $p_t$.
+- Action $a_t \in \mathcal{A}(s_t)$: selected column.
 - Valid action set:
   $$
   \mathcal{A}(s_t)=\{c \in \{0,\dots,6\}\ |\ \text{column }c\text{ is not full}\}.
   $$
-- Transition: deterministic game physics $ s_{t+1}=T(s_t,a_t) $.
+- Transition: deterministic game physics $s_{t+1}=T(s_t,a_t)$.
 - Reward (agent perspective):
   $$
   r_t=
