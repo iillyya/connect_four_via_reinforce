@@ -533,7 +533,7 @@ def train(
             )
 
     save_checkpoint(policy, path=model_path)
-    return policy, None
+    return policy
 
 
 def play_against_policy(policy: PolicyNet, opponent: PolicyNet = None, render: bool = False):
