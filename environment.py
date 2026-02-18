@@ -50,7 +50,6 @@ class Environment:
         self.history = [self.board.copy()]
         self.filled_positions = [0] * self.cols
         self._winner_cached = None
-        # keep current_player the same as originally set (alternatively randomize)
         return self.get_observation()
 
     def available_actions(self) -> List[int]:
@@ -63,7 +62,6 @@ class Environment:
         self.board[row, position] = marker
         self.filled_positions[position] += 1
         self.history.append(self.board.copy())
-        # reset cached winner because board changed
         self._winner_cached = None
 
     def make_move(self, whose_turn: str, position: int):
@@ -79,7 +77,6 @@ class Environment:
 
         winner = self.get_winner()
         if winner is not None:
-            # print just for human-run games; RL training should rely on return values from step()
             winner_name = self.player1 if winner == 1 else self.player2
             print(f"Player {whose_turn} ({winner_name}) won")
 
@@ -150,7 +147,6 @@ class Environment:
         R, C = self.rows, self.cols
         L = self.win_length
 
-        # Helper to check a run starting at (r,c) with deltas (dr,dc)
         def check_run(r, c, dr, dc):
             start = b[r, c]
             if start == 0:
@@ -209,7 +205,7 @@ class Environment:
         return self.board.copy()
 
     def print_board(self):
-        """Pretty-print board to console with top row first."""
+        """Print board to console with top row first."""
         symbol = {0: ".", 1: "X", -1: "O"}
         # print top row first
         for r in range(self.rows - 1, -1, -1):

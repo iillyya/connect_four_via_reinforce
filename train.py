@@ -20,46 +20,49 @@ MODEL_PATH_DEFAULT = "connect4_policy.pt"
 SUPPORTED_OPPONENT_KINDS = ("lagged", "random", "heuristic")
 
 
-# -------------------------
-# Networks
-# -------------------------
 class PolicyNet(nn.Module):
     def __init__(self, rows=6, cols=7):
         super().__init__()
         self.rows = rows
         self.cols = cols
-        self.net = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(rows * cols, 128),
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Linear(128, cols),
+        )
+
+        self.fc = nn.Sequential(
+            nn.Linear(64 * rows * cols, 128),
+            nn.ReLU(),
+            nn.Linear(128, cols)
         )
 
     def forward(self, x):
-        return self.net(x)
+        # x shape: (batch, rows*cols)
+        x = x.view(-1, 1, self.rows, self.cols)
+        x = self.conv(x)
+        x = torch.flatten(x, start_dim=1)
+        logits = self.fc(x)
+        return logits
+
+def compute_returns(rewards, gamma):
+    returns = []
+    G = 0
+    for r in reversed(rewards):
+        G = r + gamma * G
+        returns.append(G)
+    returns.reverse()
+    return returns
 
 
-class ValueNet(nn.Module):
-    def __init__(self, rows=6, cols=7):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(rows * cols, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1),
-        )
-
-    def forward(self, x):
-        return self.net(x).squeeze(-1)
+def mask_logits(logits, valid_actions):
+    mask = torch.full_like(logits, -1e9)
+    mask[0, valid_actions] = 0
+    return logits + mask
 
 
-# -------------------------
-# Helpers
-# -------------------------
 def encode_state(board: np.ndarray) -> torch.Tensor:
     return torch.tensor(board, dtype=torch.float32, device=device)
 
@@ -71,14 +74,6 @@ def masked_action_distribution(logits: torch.Tensor, valid_actions: List[int]) -
     masked_logits = logits + mask
     return Categorical(logits=masked_logits)
 
-
-def compute_returns(rewards: List[float], gamma=0.99) -> torch.Tensor:
-    g_value = 0.0
-    returns = []
-    for reward in reversed(rewards):
-        g_value = reward + gamma * g_value
-        returns.insert(0, g_value)
-    return torch.tensor(returns, dtype=torch.float32, device=device)
 
 
 def set_global_seed(seed: int):
@@ -279,14 +274,10 @@ def choose_training_opponent_action(
     raise ValueError(f"Unknown training opponent kind: {opponent_kind}")
 
 
-# -------------------------
-# Save / Load
-# -------------------------
-def save_checkpoint(policy: PolicyNet, value: ValueNet, path=MODEL_PATH_DEFAULT):
+def save_checkpoint(policy: PolicyNet, path=MODEL_PATH_DEFAULT):
     torch.save(
         {
             "policy_state_dict": policy.state_dict(),
-            "value_state_dict": value.state_dict(),
             "rows": policy.rows,
             "cols": policy.cols,
         },
@@ -294,29 +285,28 @@ def save_checkpoint(policy: PolicyNet, value: ValueNet, path=MODEL_PATH_DEFAULT)
     )
     print(f"Checkpoint saved to {path}")
 
-
-def load_policy_value(path=MODEL_PATH_DEFAULT):
+def load_policy(path=MODEL_PATH_DEFAULT):
     checkpoint = torch.load(path, map_location=device)
-    policy = PolicyNet(rows=checkpoint["rows"], cols=checkpoint["cols"]).to(device)
-    value = ValueNet(rows=checkpoint["rows"], cols=checkpoint["cols"]).to(device)
+
+    policy = PolicyNet(
+        rows=checkpoint["rows"],
+        cols=checkpoint["cols"],
+    ).to(device)
+
     policy.load_state_dict(checkpoint["policy_state_dict"])
-    value.load_state_dict(checkpoint["value_state_dict"])
     policy.eval()
-    value.eval()
-    print(f"Loaded checkpoint from {path}")
-    return policy, value
+
+    print(f"Loaded policy from {path}")
+    return policy
 
 
-# -------------------------
-# Training
-# -------------------------
+
 def train(
-    num_episodes: int = 5000,
+    num_episodes: int = 10000,
     gamma: float = 0.99,
     lr: float = 3e-4,
     model_path: str = MODEL_PATH_DEFAULT,
     lag_k: int = 100,
-    value_coef: float = 0.5,
     max_grad_norm: float = 0.5,
     beta: float = 0.02,
     beta_decay: float = 0.999,
@@ -331,6 +321,7 @@ def train(
     early_stop_patience: int = 5,
     selection_min_delta: float = 1e-4,
     log_window: int = 200,
+    max_num_random_openings: int = 0,
     verbose: bool = True,
 ):
     if checkpoint_every is not None and checkpoint_every < 1:
@@ -358,27 +349,24 @@ def train(
         agent="agent",
     )
 
-    policy = PolicyNet().to(device)
-    value_net = ValueNet().to(device)
+    policy = PolicyNet(rows=6, cols=7).to(device)
 
-    opponent_policy = PolicyNet().to(device)
+    opponent_policy = PolicyNet(rows=6, cols=7).to(device)
     opponent_policy.load_state_dict(policy.state_dict())
     opponent_policy.eval()
 
-    optimizer = optim.Adam(list(policy.parameters()) + list(value_net.parameters()), lr=lr)
+    optimizer = optim.Adam(policy.parameters(), lr=lr)
 
     outcome_window = deque(maxlen=log_window)
     return_window = deque(maxlen=log_window)
 
     best_eval_score = float("-inf")
     best_policy_state = copy.deepcopy(policy.state_dict())
-    best_value_state = copy.deepcopy(value_net.state_dict())
     best_episode = 0
     no_improve_evals = 0
     best_checkpoint_path = build_best_checkpoint_path(model_path)
 
     batch_log_probs: List[torch.Tensor] = []
-    batch_values: List[torch.Tensor] = []
     batch_returns: List[torch.Tensor] = []
     batch_entropies: List[torch.Tensor] = []
     episodes_in_batch = 0
@@ -393,12 +381,21 @@ def train(
         state = env.reset()
 
         log_probs = []
-        values = []
         rewards = []
         entropies = []
         terminal_reward = 0.0
 
         done = False
+
+        num_random_openings = rng.integers(0, max_num_random_openings + 1)
+
+        for _ in range(num_random_openings):
+            if done:
+                break
+
+            valid = env.available_actions()
+            action = int(rng.choice(valid))
+            state, _, done, _ = env.step(action)
 
         while not done:
             if env.current_player == env.player1:
@@ -410,13 +407,11 @@ def train(
 
                 action = dist.sample()
                 log_prob = dist.log_prob(action)
-                value_pred = value_net(state_proc.unsqueeze(0)).squeeze(0)
                 entropy = dist.entropy()
 
                 next_state, reward, done, _ = env.step(action.item())
 
                 log_probs.append(log_prob)
-                values.append(value_pred)
                 rewards.append(reward)
                 entropies.append(entropy)
                 state = next_state
@@ -444,8 +439,9 @@ def train(
             continue
 
         returns = compute_returns(rewards, gamma)
+        returns = torch.tensor(returns, dtype=torch.float32, device=device)
+
         batch_log_probs.append(torch.stack(log_probs))
-        batch_values.append(torch.stack(values).squeeze())
         batch_returns.append(returns)
         batch_entropies.append(torch.stack(entropies))
         episodes_in_batch += 1
@@ -456,32 +452,28 @@ def train(
         should_update = (episodes_in_batch >= update_every) or (episode == num_episodes)
         if should_update:
             update_step += 1
+
             log_probs_tensor = torch.cat(batch_log_probs)
-            values_tensor = torch.cat(batch_values)
             returns_tensor = torch.cat(batch_returns)
             entropies_tensor = torch.cat(batch_entropies)
 
-            advantages = returns_tensor - values_tensor
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            returns_tensor = (returns_tensor - returns_tensor.mean()) / (
+                returns_tensor.std() + 1e-8
+            )
 
-            policy_loss = -(log_probs_tensor * advantages.detach()).mean()
-            value_loss = nn.functional.mse_loss(values_tensor, returns_tensor)
+            policy_loss = -(log_probs_tensor * returns_tensor.detach()).mean()
             entropy_bonus = entropies_tensor.mean()
 
             current_beta = max(beta_min, beta * (beta_decay ** (update_step - 1)))
-            loss = policy_loss + value_coef * value_loss - current_beta * entropy_bonus
+            loss = policy_loss - current_beta * entropy_bonus
 
             optimizer.zero_grad()
             loss.backward()
             if max_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(
-                    list(policy.parameters()) + list(value_net.parameters()),
-                    max_grad_norm,
-                )
+                torch.nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
             optimizer.step()
 
             batch_log_probs.clear()
-            batch_values.clear()
             batch_returns.clear()
             batch_entropies.clear()
             episodes_in_batch = 0
@@ -493,7 +485,7 @@ def train(
                 print(f"[Episode {episode}] Updated lagged opponent (lag {lag_k}).")
 
         if checkpoint_every and episode % checkpoint_every == 0:
-            save_checkpoint(policy, value_net, path=build_episode_checkpoint_path(model_path, episode))
+            save_checkpoint(policy, path=build_episode_checkpoint_path(model_path, episode))
 
         if episode % 100 == 0 and verbose:
             win_rate = float(np.mean([1.0 if x > 0 else 0.0 for x in outcome_window])) if outcome_window else 0.0
@@ -512,55 +504,38 @@ def train(
                 seed=seed + 17 * episode,
             )
 
-            rand_all = eval_results["random"]["overall"]["score"]
-            heur_all = eval_results["heuristic"]["overall"]["score"]
-            rand_first = eval_results["random"]["agent_first"]["score"]
-            rand_second = eval_results["random"]["agent_second"]["score"]
-            heur_first = eval_results["heuristic"]["agent_first"]["score"]
-            heur_second = eval_results["heuristic"]["agent_second"]["score"]
-
             if verbose:
-                print(
-                    f"[Eval @ {episode}] sel={selection_score:.4f} | "
-                    f"random all/f/s={rand_all:.3f}/{rand_first:.3f}/{rand_second:.3f} | "
-                    f"heuristic all/f/s={heur_all:.3f}/{heur_first:.3f}/{heur_second:.3f}"
-                )
+                print(f"[Eval @ {episode}] sel={selection_score:.4f}")
 
             if selection_score > best_eval_score + selection_min_delta:
                 best_eval_score = selection_score
                 best_policy_state = copy.deepcopy(policy.state_dict())
-                best_value_state = copy.deepcopy(value_net.state_dict())
                 best_episode = episode
                 no_improve_evals = 0
-                save_checkpoint(policy, value_net, path=best_checkpoint_path)
+                save_checkpoint(policy, path=best_checkpoint_path)
             else:
                 no_improve_evals += 1
 
             if early_stop_patience > 0 and no_improve_evals >= early_stop_patience:
                 if verbose:
                     print(
-                        f"Early stopping at episode {episode}: no evaluation improvement in "
-                        f"{no_improve_evals} eval rounds. Best episode: {best_episode}, "
-                        f"best score: {best_eval_score:.4f}."
+                        f"Early stopping at episode {episode}. "
+                        f"Best episode: {best_episode}, best score: {best_eval_score:.4f}"
                     )
                 break
 
     if best_policy_state is not None:
         policy.load_state_dict(best_policy_state)
-        value_net.load_state_dict(best_value_state)
         if verbose and best_episode > 0:
             print(
                 f"Loaded best checkpoint from episode {best_episode} "
                 f"with selection score {best_eval_score:.4f}"
             )
 
-    save_checkpoint(policy, value_net, path=model_path)
-    return policy, value_net
+    save_checkpoint(policy, path=model_path)
+    return policy, None
 
 
-# -------------------------
-# Simple play function to test trained policy vs opponent
-# -------------------------
 def play_against_policy(policy: PolicyNet, opponent: PolicyNet = None, render: bool = False):
     del render
 
@@ -604,7 +579,7 @@ def play_against_policy(policy: PolicyNet, opponent: PolicyNet = None, render: b
 def main():
     parser = ArgumentParser()
     parser.add_argument("--MODEL_PATH", type=str, default=MODEL_PATH_DEFAULT, help="Path to save/load the model")
-    parser.add_argument("--episodes", type=int, default=20000, help="Number of training episodes")
+    parser.add_argument("--episodes", type=int, default=10000, help="Number of training episodes")
     parser.add_argument("--lag_k", type=int, default=100, help="Episodes between lagged-opponent refreshes")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")

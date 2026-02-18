@@ -1,6 +1,15 @@
 import pygame
 import sys
 from environment import Environment
+from argparse import ArgumentParser
+import torch
+import os
+
+from train import PolicyNet
+from train import encode_state, masked_action_distribution
+from train import load_policy  
+
+
 
 class PygameRenderer:
     def __init__(self, env: Environment, cell_size: int = 80, padding: int = 10):
@@ -63,8 +72,81 @@ class PygameRenderer:
                 pygame.time.wait(2000)
                 self.env.reset()
 
+
+    def play_human_vs_model(self, model_path: str, who_starts: str = "alternate"):
+        policy = load_policy(model_path)
+        policy.eval()
+
+        game_count = 0
+
+        def configure_starting_player():
+            nonlocal game_count
+
+            if who_starts == "human":
+                self.env.current_player = self.env.player1
+            elif who_starts == "model":
+                self.env.current_player = self.env.player2
+            else:  # alternate
+                if game_count % 2 == 0:
+                    self.env.current_player = self.env.player1
+                else:
+                    self.env.current_player = self.env.player2
+
+            game_count += 1
+
+        self.env.reset()
+        configure_starting_player()
+
+        model_needs_to_move = True
+
+        while True:
+            self.clock.tick(30)
+            click = self.handle_events()
+
+            human_player = self.env.player1
+            model_player = self.env.player2
+
+            if self.env.current_player == human_player:
+                model_needs_to_move = True
+
+                if click is not None:
+                    try:
+                        self.env.step(click)
+                    except ValueError as e:
+                        print(e)
+
+            else:
+                if model_needs_to_move:
+                    pygame.time.wait(300)
+
+                    state = encode_state(self.env.board)
+                    with torch.no_grad():
+                        logits = policy(state.unsqueeze(0)).squeeze(0)
+                        valid_actions = self.env.available_actions()
+                        dist = masked_action_distribution(logits, valid_actions)
+                        action = dist.probs.argmax().item()
+
+                    self.env.step(action)
+                    model_needs_to_move = False
+
+            self.draw()
+
+            if self.env.is_terminal():
+                winner = self.env.winner_name()
+                print("Game over. Winner:", winner)
+                pygame.time.wait(1500)
+
+                self.env.reset()
+                configure_starting_player()
+                model_needs_to_move = True
+
 if __name__ == "__main__":
+    argparser = ArgumentParser()
+    argparser.add_argument("--model_path", type=str, default="connect_4_bot.pt")
+    argparser.add_argument("--who_starts", type=str, choices=["human", "model", "alternate"], default="alternate")
+    args = argparser.parse_args()
+
     from environment import Environment
-    env = Environment()
+    env = Environment(player1="player1", player2="player2", who_starts="player1", agent="player2")
     renderer = PygameRenderer(env)
-    renderer.play_human_vs_human()
+    renderer.play_human_vs_model(args.model_path, who_starts=args.who_starts)
