@@ -15,3 +15,9 @@ The environment is implemented from scratch and visualization is handled via **P
 
 ---
 
+
+## Installation
+
+Run
+
+uv run download_model.py "https://drive.google.com/uc?id=18ckHsBTUuwq5ny8UpS8DtsUgxkSB3IlX"

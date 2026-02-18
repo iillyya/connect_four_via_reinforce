@@ -9,10 +9,11 @@ import torch
 
 from environment import Environment
 from opponents import heuristic_opponent_action, random_opponent_action
-from train import encode_state, load_policy_value, masked_action_distribution, set_global_seed
+from train import encode_state, masked_action_distribution, set_global_seed, load_policy
+
 
 SUPPORTED_OPPONENTS = {"random", "heuristic", "self"}
-PROTOCOL_VERSION = "1.1"
+# PROTOCOL_VERSION = "1.1"
 
 
 def str2bool(value: str) -> bool:
@@ -65,12 +66,15 @@ def build_start_order(num_games: int, swap_sides: bool, rng: np.random.Generator
     return start_order
 
 
-def _policy_action(policy: torch.nn.Module, board: np.ndarray, valid_actions: List[int], perspective: float) -> int:
-    state_proc = encode_state(board) * perspective
+def _policy_action(policy: torch.nn.Module, board: np.ndarray, valid_actions: List[int], greedy: bool = True) -> int:
+    state_proc = encode_state(board)
     with torch.no_grad():
         logits = policy(state_proc.unsqueeze(0)).squeeze(0)
         dist = masked_action_distribution(logits, valid_actions)
-        action = int(torch.argmax(dist.probs).item())
+        if greedy:
+            action = int(torch.argmax(dist.probs).item())
+        else:
+            action = int(dist.sample().item())
     return action
 
 
@@ -86,8 +90,7 @@ def _opponent_action(
     if opponent_kind == "heuristic":
         return heuristic_opponent_action(env, player="opponent", rng=rng)
     if opponent_kind == "self":
-        perspective = 1.0 if env.current_player == env.player1 else -1.0
-        return _policy_action(policy, board, env.available_actions(), perspective)
+        return _policy_action(policy, board, env.available_actions())
     raise ValueError(f"Unknown opponent kind: {opponent_kind}")
 
 
@@ -96,6 +99,7 @@ def play_single_game(
     opponent_kind: str,
     agent_first: bool,
     rng: np.random.Generator,
+    evaluation_mode: bool = True,
 ) -> Dict[str, float]:
     if agent_first:
         env = Environment(player1="agent", player2="opponent", who_starts="agent", agent="agent")
@@ -112,8 +116,7 @@ def play_single_game(
     while not done:
         valid_actions = env.available_actions()
         if env.current_player == "agent":
-            perspective = 1.0 if env.current_player == env.player1 else -1.0
-            action = _policy_action(policy, state, valid_actions, perspective)
+            action = _policy_action(policy, state, valid_actions, greedy=evaluation_mode)
             agent_moves += 1
             if action not in valid_actions:
                 illegal_moves += 1
@@ -201,7 +204,7 @@ def evaluate_policy(
     second = _new_aggregate()
 
     for agent_first in start_order:
-        game = play_single_game(policy, opponent_kind, agent_first, rng)
+        game = play_single_game(policy, opponent_kind, agent_first, rng, evaluation_mode=False)
         _update_aggregate(overall, game)
         if agent_first:
             _update_aggregate(first, game)
@@ -226,8 +229,7 @@ def run_evaluation(
     seed: int,
 ) -> Dict[str, object]:
     set_global_seed(seed)
-    policy, _ = load_policy_value(path=model_path)
-
+    policy = load_policy(path=model_path)
     results = {}
     for idx, opponent_kind in enumerate(opponents):
         results[opponent_kind] = evaluate_policy(
@@ -243,7 +245,7 @@ def run_evaluation(
         "num_games": num_games,
         "seed": seed,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "protocol_version": PROTOCOL_VERSION,
+        # "protocol_version": PROTOCOL_VERSION,
         "results": results,
     }
 
