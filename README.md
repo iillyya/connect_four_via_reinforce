@@ -2,7 +2,7 @@
 
 This project implements a **Connect Four** agent trained using the **REINFORCE (Monte Carlo Policy Gradient)** algorithm in PyTorch.
 
-The environment is implemented from scratch using **NumPy** (no Gym/Gymnasium), and visualization is handled optionally via **Pygame**.
+The environment is implemented from scratch using **NumPy** (no Gym/Gymnasium), and visualization is handled via **Pygame**.
 
 ---
 
