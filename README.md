@@ -4,43 +4,66 @@ Compact RL project: a Connect-4 agent trained with REINFORCE
 
 ## 1. Problem formulation (MDP)
 
-We model Connect-4 as an MDP $(\mathcal{S}, \mathcal{A}, P, R, \gamma)$:
+We model Connect-4 as an MDP:
 
-- State $s_t = (B_t, p_t)$: board $B_t \in \{-1,0,+1\}^{6 \times 7}$ and current player $p_t$.
-- Action $a_t \in \mathcal{A}(s_t)$: selected column.
+```math
+(\mathcal{S}, \mathcal{A}, P, R, \gamma)
+```
+
+- State:
+  ```math
+  s_t = (B_t, p_t)
+  ```
+  where
+  ```math
+  B_t \in \{-1,0,+1\}^{6 \times 7}
+  ```
+  and `p_t` is the current player.
+- Action:
+  ```math
+  a_t \in \mathcal{A}(s_t)
+  ```
+  (selected column).
 - Valid action set:
-  $$
+  ```math
   \mathcal{A}(s_t)=\{c \in \{0,\dots,6\}\ |\ \text{column }c\text{ is not full}\}.
-  $$
-- Transition: deterministic game physics $s_{t+1}=T(s_t,a_t)$.
+  ```
+- Transition (deterministic game physics):
+  ```math
+  s_{t+1}=T(s_t,a_t)
+  ```
 - Reward (agent perspective):
-  $$
+  ```math
   r_t=
   \begin{cases}
   +1,& \text{agent wins}\\
   -1,& \text{agent loses}\\
   0,& \text{otherwise (including draw)}
   \end{cases}
-  $$
+  ```
 - Objective:
-  $$
+  ```math
   J(\theta)=\mathbb{E}_{\tau \sim \pi_\theta}\left[\sum_{t=0}^{T}\gamma^t r_t\right].
-  $$
+  ```
 
 ## 2. Method (REINFORCE + CNN)
 
 - Policy network (`PolicyNet`): `Conv2d(1,32,3) -> Conv2d(32,64,3) -> Linear(64*6*7,128) -> Linear(128,7)`.
 - Invalid moves are masked before sampling/action selection (`masked_action_distribution`).
 - Returns:
-  $$
+  ```math
   G_t=\sum_{k=t}^{T}\gamma^{k-t}r_k
-  $$
+  ```
 - Loss with entropy regularization:
-  $$
+  ```math
   \mathcal{L}(\theta)= -\mathbb{E}\left[\sum_t \log \pi_\theta(a_t|s_t)\,\hat{G}_t\right]
   -\beta\,\mathbb{E}\left[\sum_t \mathcal{H}\left(\pi_\theta(\cdot|s_t)\right)\right]
-  $$
-  where $\hat{G}_t$ are normalized returns.
+  ```
+  where
+  ```math
+  \hat{G}_t
+  ```
+  are normalized returns.
 - Training opponent is sampled from a mixture of `lagged`, `random`, and `heuristic` opponents.
 
 Algorithm essentials:
@@ -81,7 +104,10 @@ Interpretation: the side-dependent asymmetry is still visible (especially in sel
 
 `evaluate.py` reports:
 
-- score $=(\text{wins} + 0.5 \cdot \text{draws})/\text{games}$,
+- score:
+  ```math
+  (\text{wins} + 0.5 \cdot \text{draws})/\text{games}
+  ```
 - 95% Wilson CI for score,
 - split metrics for agent-first vs agent-second,
 - illegal move rate.
